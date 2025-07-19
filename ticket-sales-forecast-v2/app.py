@@ -159,3 +159,4 @@ fig_future.update_layout(
 st.plotly_chart(fig_future, use_container_width=True)
 
 st.dataframe(pred_df)
+
