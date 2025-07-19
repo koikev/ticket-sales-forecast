@@ -19,14 +19,12 @@ if uploaded_file is None:
     st.info("Please upload a CSV to begin.")
     st.stop()
 
-# Load CSV
 try:
     data_all = pd.read_csv(uploaded_file, parse_dates=["date"])
 except Exception as e:
     st.error(f"Failed to read CSV: {e}")
     st.stop()
 
-# Ensure columns are correct
 if not {"date", "tickets_sold"}.issubset(data_all.columns):
     st.error("CSV must have columns: 'date', 'tickets_sold'")
     st.stop()
@@ -189,8 +187,6 @@ fig_cum.update_layout(title="Cumulative Variance (Actual vs. Baseline)", xaxis_t
 st.plotly_chart(fig_cum, use_container_width=True)
 
 # --- GLOBAL BENCHMARK CUMULATIVE SALES CURVE (days_to_show) ---
-
-# Helper functions to assign show end_date and show name for each row in data_all
 def assign_show_end_date(row, shows):
     for show in shows:
         if show["start_date"] <= row["date"].date() <= show["end_date"]:
@@ -208,15 +204,12 @@ data_all["show_name"] = data_all.apply(assign_show_name, axis=1, shows=st.sessio
 data_filtered = data_all.dropna(subset=["show_end_date", "show_name"]).copy()
 data_filtered["days_to_show"] = (data_filtered["show_end_date"] - data_filtered["date"]).dt.days
 
-# Sort and compute cumulative sales per show
 data_filtered = data_filtered.sort_values(["show_name", "date"])
 data_filtered["cumulative_sales"] = data_filtered.groupby("show_name")["tickets_sold"].cumsum()
 
-# Aggregate median cumulative sales by days_to_show across all shows
 benchmark_df = data_filtered.groupby("days_to_show")["cumulative_sales"].median().reset_index()
 benchmark_df = benchmark_df.sort_values("days_to_show")
 
-# Fit isotonic regression to global benchmark
 ir_global = IsotonicRegression(increasing=True, out_of_bounds='clip')
 benchmark_df["cumulative_sales_pred"] = ir_global.fit_transform(benchmark_df["days_to_show"], benchmark_df["cumulative_sales"])
 
@@ -239,7 +232,6 @@ fig_iso.add_trace(go.Scatter(
     showlegend=False,
 ))
 
-# Add global benchmark overlay line
 fig_iso.add_trace(go.Scatter(
     x=df_show["days_to_show"],
     y=df_show["benchmark_cumulative_sales"],
@@ -251,7 +243,7 @@ fig_iso.add_trace(go.Scatter(
 fig_iso.update_layout(xaxis_title="Days to Show (0 = Show Day)", yaxis_title="Cumulative Tickets Sold")
 st.plotly_chart(fig_iso, use_container_width=True)
 
-# --- Display today's benchmark cumulative sales for selected show ---
+# --- TODAY'S BENCHMARK CUMULATIVE SALES FOR SELECTED SHOW ---
 today = pd.Timestamp.now().normalize()
 if current_show["start_date"] <= today.date() <= current_show["end_date"]:
     days_left = (pd.to_datetime(current_show["end_date"]) - today).days
@@ -260,3 +252,46 @@ if current_show["start_date"] <= today.date() <= current_show["end_date"]:
 else:
     st.markdown("### Today's date is outside the show date range; benchmark not applicable.")
 
+# --- NEW FEATURE: Predictive Baseline for ANY FUTURE SHOW ---
+
+st.sidebar.header("Predict Baseline for New/Future Show")
+
+future_show_date = st.sidebar.date_input(
+    "Select Future Show Date for Baseline Prediction",
+    value=pd.Timestamp.today().date() + timedelta(days=30),
+    min_value=pd.Timestamp.today().date()
+)
+
+max_days_before_show = st.sidebar.slider(
+    "Days Before Show to Forecast", min_value=7, max_value=90, value=60
+)
+
+def get_benchmark_curve(ir_model, max_days=60):
+    days_range = np.arange(max_days, -1, -1)  # from max_days down to 0 (show day)
+    predicted_cum_sales = ir_model.predict(days_range)
+    return pd.DataFrame({
+        "days_to_show": days_range,
+        "predicted_cumulative_sales": predicted_cum_sales
+    })
+
+benchmark_curve_df = get_benchmark_curve(ir_global, max_days_before_show)
+
+st.header(f"Predicted Baseline Cumulative Sales for New Show on {future_show_date}")
+st.write(f"Expected cumulative ticket sales from {max_days_before_show} days before show day to show day.")
+
+fig_benchmark = go.Figure()
+fig_benchmark.add_trace(go.Scatter(
+    x=benchmark_curve_df["days_to_show"],
+    y=benchmark_curve_df["predicted_cumulative_sales"],
+    mode="lines+markers",
+    name="Baseline Cumulative Sales"
+))
+fig_benchmark.update_layout(
+    title="Baseline Cumulative Ticket Sales by Days to Show",
+    xaxis_title="Days to Show (0 = Show Day)",
+    yaxis_title="Cumulative Tickets Sold",
+    yaxis=dict(range=[0, benchmark_curve_df["predicted_cumulative_sales"].max() * 1.1])
+)
+st.plotly_chart(fig_benchmark, use_container_width=True)
+
+st.dataframe(benchmark_curve_df)
